@@ -81,6 +81,10 @@ GREEN = ACCENT        # done / visible: LocalSend shows success in its primary c
 YELLOW = '#ffb74d'    # warnings (LocalSend uses orange)
 RED = '#ffb4ab'       # error
 VISIBLE = 5
+L, R = 12, 308              # text margins (ink edges)
+BOX_L, BOX_R = 6, 314      # highlights, boxes, footer rule
+ROW_TOP, ROW_H = 42, 20     # list rows
+FOOT = 162                 # footer baseline
 
 
 def log(*a):
@@ -953,19 +957,22 @@ class App:
                 self.fonts[key] = ImageFont.truetype(FONT, size)
         return self.fonts[key]
 
-    def text(self, d, xy, s, size=14, fill=FG, bold=False, max_width=None, anchor_right=False):
-        """Draw text; non-Latin text uses the CJK font, long text is shortened with …"""
+    def text(self, d, xy, s, size=14, fill=FG, bold=False, max_width=None, anchor_right=False, kind=None):
+        """Draw text on a baseline. xy is (left ink edge, baseline), or (right ink edge, baseline) with
+        anchor_right, so text lines up to the pixel with the grid whatever its first or last glyph.
+        Non-Latin text uses the CJK font, long text is shortened with …  Returns the ink width."""
         cjk = any(ord(c) > 0x2FF and not 0x2000 <= ord(c) <= 0x2BFF for c in s)
-        font = self.font('cjk', size) if cjk else self.font('bold' if bold else 'regular', size)
+        font = self.font('cjk', size) if cjk else self.font(kind or ('bold' if bold else 'regular'), size)
         if max_width is not None and d.textlength(s, font=font) > max_width:
             while s and d.textlength(s + '…', font=font) > max_width:
                 s = s[:-1]
             s += '…'
+        if not s:
+            return 0
+        x0, _, x1, _ = d.textbbox((0, 0), s, font=font, anchor='ls')
         x, y = xy
-        if anchor_right:
-            x -= d.textlength(s, font=font)
-        d.text((x, y - (2 if cjk else 0)), s, font=font, fill=fill)
-        return d.textlength(s, font=font)
+        d.text((x - x1 if anchor_right else x - x0, y), s, font=font, fill=fill, anchor='ls')
+        return x1 - x0
 
     def toast(self, text, colour=MUTED, seconds=4):
         self.message, self.message_colour = text, colour
@@ -978,66 +985,75 @@ class App:
         return self.addresses[0][1] if self.addresses else 'no Wi-Fi'
 
     # ---- drawing helpers
+    # Layout grid: all text runs between x = L and x = R (ink edges); highlights, boxes and the footer
+    # rule run between BOX_L and BOX_R; rows are ROW_H tall from ROW_TOP; every text sits on a baseline.
     def header(self, d, title, sub, status=None):
-        d.text((10, 4), title, font=self.font('title', 17), fill=FG)
+        status_w = 0
         if status:
             label, colour = status
-            w = d.textlength(label, font=self.font('regular', 11))
-            d.ellipse((300 - w - 10, 11, 300 - w - 4, 17), fill=colour)
-            d.text((310 - w, 7), label, font=self.font('regular', 11), fill=colour)
-        self.text(d, (12, 26), sub, size=11, fill=MUTED, max_width=296)
+            w = self.text(d, (R, 20), label, size=11, fill=colour, anchor_right=True)
+            cx = R - w - 8
+            d.ellipse((cx - 3, 13, cx + 3, 19), fill=colour)       # centred on the label's capitals
+            status_w = w + 14
+        self.text(d, (L, 20), title, size=17, kind='title', max_width=R - L - status_w - 12)
+        self.text(d, (L, 35), sub, size=11, fill=MUTED, max_width=R - L)
 
     def footer(self, d, keys):
-        d.line((8, 146, 312, 146), fill=RULE)
+        d.line((BOX_L, 146, BOX_R, 146), fill=RULE)
         if self.message and time.monotonic() < self.message_until:
-            self.text(d, (10, 152), self.message, size=11, fill=self.message_colour, max_width=300)
+            self.text(d, (L, FOOT), self.message, size=11, fill=self.message_colour, max_width=R - L)
             return
-        x, small = 10, self.font('regular', 11)
-        for key, action in keys:
-            width = d.textlength(key + ' ' + action, font=small)
-            if x + width > 312:
-                break
-            d.text((x, 152), key, font=small, fill=FG)
-            x += d.textlength(key + ' ', font=small)
-            d.text((x, 152), action, font=small, fill=FAINT)
-            x += d.textlength(action, font=small) + 12
+        small = self.font('regular', 11)
+        items = [(k, a, d.textlength(k + ' ' + a, font=small)) for k, a in keys]
+        while len(items) > 1 and sum(w for *_, w in items) + 10 * (len(items) - 1) > R - L:
+            items.pop(-2 if len(items) > 2 else -1)              # keep the last hint (Back / Exit)
+        total = sum(w for *_, w in items)
+        # Four or more hints are spread edge to edge so the bar ends on the right margin; fewer keep a
+        # fixed gap from the left margin.
+        gap = (R - L - total) / (len(items) - 1) if len(items) >= 4 else 16
+        x = L - d.textbbox((0, 0), items[0][0], font=small, anchor='ls')[0]
+        for key, action, width in items:
+            d.text((x, FOOT), key, font=small, fill=FG, anchor='ls')
+            d.text((x + d.textlength(key + ' ', font=small), FOOT), action, font=small, fill=FAINT, anchor='ls')
+            x += width + gap
 
     def row(self, d, slot, selected, left, right='', left_colour=FG, right_colour=FAINT, marker=None):
-        y = 43 + 20 * slot
+        top = ROW_TOP + ROW_H * slot
         if selected:
-            d.rounded_rectangle((6, y - 1, 305, y + 18), radius=4, fill=ROW)
-            d.rounded_rectangle((6, y + 2, 8, y + 15), radius=1, fill=ACCENT)
-        x = 14
+            d.rounded_rectangle((BOX_L, top, BOX_R, top + ROW_H - 2), radius=4, fill=ROW)
+            d.rounded_rectangle((BOX_L, top + 4, BOX_L + 2, top + ROW_H - 6), radius=1, fill=ACCENT)
+        base = top + 14                     # capitals centred in the highlight
+        x = L
         if marker:
-            marker(d, x, y)
-            x += 18
+            marker(d, x + 8, top + 9)       # icons are drawn round the centre of a 16 px cell
+            x += 22
         right_w = 0
         if right:
-            right_w = self.text(d, (298, y + 2), right, size=11, fill=right_colour, anchor_right=True,
-                                max_width=170)
-        self.text(d, (x, y), left, size=14, fill=left_colour, max_width=298 - x - right_w - 8)
+            right_w = self.text(d, (R, base), right, size=11, fill=right_colour, anchor_right=True, max_width=170)
+        self.text(d, (x, base), left, size=14, fill=left_colour, max_width=R - x - right_w - (10 if right else 0))
 
     def scrollbar(self, d, count, top):
         if count > VISIBLE:
-            h = 100 * VISIBLE // count
-            y0 = 42 + (100 - h) * top // (count - VISIBLE)
-            d.rounded_rectangle((311, 42, 313, 142), radius=1, fill=RULE)
-            d.rounded_rectangle((311, y0, 313, y0 + h), radius=1, fill=FAINT)
+            span = ROW_H * VISIBLE - 2
+            h = span * VISIBLE // count
+            y0 = ROW_TOP + (span - h) * top // (count - VISIBLE)
+            d.rounded_rectangle((316, ROW_TOP, 318, ROW_TOP + span), radius=1, fill=RULE)
+            d.rounded_rectangle((316, y0, 318, y0 + h), radius=1, fill=FAINT)
 
     @staticmethod
     def device_icon(kind, colour):
-        def draw(d, x, y):
+        def draw(d, cx, cy):
             if kind == 'mobile':
-                d.rounded_rectangle((x + 3, y + 2, x + 11, y + 16), radius=2, outline=colour, width=2)
+                d.rounded_rectangle((cx - 4, cy - 7, cx + 4, cy + 7), radius=2, outline=colour, width=2)
             elif kind == 'web':
-                d.ellipse((x + 1, y + 2, x + 15, y + 16), outline=colour, width=2)
-                d.line((x + 1, y + 9, x + 15, y + 9), fill=colour)
+                d.ellipse((cx - 7, cy - 7, cx + 7, cy + 7), outline=colour, width=2)
+                d.line((cx - 7, cy, cx + 7, cy), fill=colour)
             elif kind in ('server', 'headless'):
-                d.rectangle((x + 1, y + 3, x + 14, y + 8), outline=colour, width=2)
-                d.rectangle((x + 1, y + 10, x + 14, y + 15), outline=colour, width=2)
+                d.rectangle((cx - 7, cy - 6, cx + 7, cy - 1), outline=colour, width=2)
+                d.rectangle((cx - 7, cy + 1, cx + 7, cy + 6), outline=colour, width=2)
             else:
-                d.rectangle((x + 1, y + 3, x + 15, y + 12), outline=colour, width=2)
-                d.line((x + 5, y + 15, x + 11, y + 15), fill=colour, width=2)
+                d.rectangle((cx - 7, cy - 6, cx + 7, cy + 3), outline=colour, width=2)
+                d.line((cx - 3, cy + 6, cx + 3, cy + 6), fill=colour, width=2)
         return draw
 
     # ---- screens
@@ -1061,16 +1077,13 @@ class App:
         self.selected = min(self.selected, max(0, len(peers) - 1))
         self.top = max(min(self.top, self.selected), self.selected - VISIBLE + 1, 0)
         if not peers:
-            lines = [('Looking for nearby devices…', FG),
-                     ('Open LocalSend on a phone or computer', MUTED),
-                     ('on the same Wi-Fi. This Cardputer shows', MUTED),
-                     (f'up there as “{self.core.config["alias"]}”.', MUTED),
-                     ('A adds a device by IP (e.g. Tailscale).', FAINT)]
-            if self.core.error:
-                lines = [(self.core.error, RED)] + lines[1:]
-            for i, (line, colour) in enumerate(lines):
-                self.text(d, (12, 44 + i * 19 - (0 if i == 0 else 2)), line, size=14 if i == 0 else 12,
-                          fill=colour, max_width=296)
+            first = (self.core.error, RED) if self.core.error else ('Looking for nearby devices…', FG)
+            self.text(d, (L, 58), first[0], size=14, fill=first[1], max_width=R - L)
+            for i, line in enumerate(['Open LocalSend on a phone or computer',
+                                      'on the same Wi-Fi. This Cardputer shows',
+                                      f'up there as “{self.core.config["alias"]}”.']):
+                self.text(d, (L, 78 + i * 16), line, size=12, fill=MUTED, max_width=R - L)
+            self.text(d, (L, 134), 'A adds a device by IP (e.g. Tailscale).', size=12, fill=FAINT, max_width=R - L)
         for slot, i in enumerate(range(self.top, min(self.top + VISIBLE, len(peers)))):
             p = peers[i]
             right = p.ip if not p.model else f'{p.model}'
@@ -1105,20 +1118,21 @@ class App:
         self.header(d, 'Send to ' + self.target.alias if len(self.target.alias) < 14 else 'Send files', sub)
         entries = b['entries']
         if not entries:
-            self.text(d, (14, 46), 'Empty folder' if not b.get('error') else b['error'], size=13, fill=MUTED)
+            self.text(d, (L, 58), 'Empty folder' if not b.get('error') else b['error'], size=13, fill=MUTED,
+                      max_width=R - L)
         sel = b['selected']
         b['top'] = max(min(b['top'], sel), sel - VISIBLE + 1, 0)
         for slot, i in enumerate(range(b['top'], min(b['top'] + VISIBLE, len(entries)))):
             path, is_dir, size = entries[i]
-            def marker(d, x, y, path=path, is_dir=is_dir):
+            def marker(d, cx, cy, path=path, is_dir=is_dir, selected=i == sel):
                 if path in marked:
-                    d.rounded_rectangle((x + 1, y + 3, x + 13, y + 15), radius=3, fill=GREEN)
-                    d.line((x + 4, y + 9, x + 6, y + 12, x + 11, y + 5), fill=ON_ACCENT, width=2)
+                    d.rounded_rectangle((cx - 6, cy - 6, cx + 6, cy + 6), radius=3, fill=GREEN)
+                    d.line((cx - 3, cy, cx - 1, cy + 3, cx + 4, cy - 3), fill=ON_ACCENT, width=2)
                 elif is_dir:
-                    d.polygon((x + 1, y + 4, x + 6, y + 4, x + 8, y + 6, x + 14, y + 6, x + 14, y + 15,
-                               x + 1, y + 15), outline=ACCENT if i == sel else MUTED)
+                    d.polygon((cx - 7, cy - 6, cx - 2, cy - 6, cx, cy - 4, cx + 7, cy - 4, cx + 7, cy + 6,
+                               cx - 7, cy + 6), outline=ACCENT if selected else MUTED)
                 else:
-                    d.rectangle((x + 3, y + 3, x + 12, y + 15), outline=FAINT)
+                    d.rectangle((cx - 5, cy - 6, cx + 5, cy + 6), outline=FAINT)
             name = path.name + ('/' if is_dir else '') if path.name else '..'
             self.row(d, slot, i == sel, name, '' if is_dir else human_size(size),
                      left_colour=FG, marker=marker)
@@ -1132,16 +1146,15 @@ class App:
     def draw_input(self, d):
         box = self.input
         self.header(d, box['title'], box.get('hint', ''))
-        d.rounded_rectangle((8, 42, 312, 140), radius=5, outline=RULE)
+        d.rounded_rectangle((BOX_L, 42, BOX_R, 140), radius=5, outline=RULE)
         text = box['text']
         lines, line = [], ''
-        font_size = 14
         cjk = any(ord(c) > 0x2FF for c in text)
-        font = self.font('cjk' if cjk else 'regular', font_size)
+        font = self.font('cjk' if cjk else 'regular', 14)
         for paragraph in text.split('\n'):
             line = ''
             for ch in paragraph:
-                if d.textlength(line + ch, font=font) > 288:
+                if d.textlength(line + ch, font=font) > R - L - 4:
                     lines.append(line)
                     line = ''
                 line += ch
@@ -1149,13 +1162,13 @@ class App:
         lines = lines[-5:]
         cursor_on = int(time.monotonic() * 2) % 2 == 0
         for i, line in enumerate(lines):
-            y = 47 + i * 18
-            d.text((14, y - (2 if cjk else 0)), line, font=font, fill=FG)
+            base = 59 + i * 18
+            d.text((L, base), line, font=font, fill=FG, anchor='ls')
             if i == len(lines) - 1 and cursor_on:
-                x = 15 + d.textlength(line, font=font)
-                d.line((x, y + 1, x, y + 16), fill=ACCENT, width=2)
+                x = L + 1 + d.textlength(line, font=font)
+                d.line((x, base - 13, x, base + 3), fill=ACCENT, width=2)
         if self.shift_sticky or self.shift:
-            self.text(d, (300, 124), '⇧', size=12, fill=ACCENT, anchor_right=True)
+            self.text(d, (R, 134), '⇧', size=12, fill=ACCENT, anchor_right=True)
         self.footer(d, [('Enter', box.get('ok', 'OK')), ('⌫', 'Delete'), ('Sym', 'Symbols'), ('ESC', 'Cancel')])
 
     def draw_incoming(self, d):
@@ -1169,16 +1182,17 @@ class App:
         self.header(d, 'Incoming', f'{alias}' + (f'  ·  {model}' if model else '') + f'  ·  {inc.ip}',
                     ('Waiting', YELLOW))
         count = len(inc.files)
-        self.text(d, (12, 44), f'{count} file{"s" if count != 1 else ""}  ·  {human_size(total)}', size=15,
-                  fill=FG, bold=True)
+        self.text(d, (L, 59), f'{count} file{"s" if count != 1 else ""}  ·  {human_size(total)}', size=15,
+                  bold=True)
         for i, f in enumerate(inc.files[:3]):
-            self.text(d, (14, 66 + i * 17), safe_relative(f['name']).name, size=12, fill=MUTED, max_width=220)
-            self.text(d, (298, 67 + i * 17), human_size(f['size']), size=11, fill=FAINT, anchor_right=True)
+            base = 79 + i * 17
+            w = self.text(d, (R, base), human_size(f['size']), size=11, fill=FAINT, anchor_right=True)
+            self.text(d, (L, base), safe_relative(f['name']).name, size=12, fill=MUTED, max_width=R - L - w - 10)
         if count > 3:
-            self.text(d, (14, 117), f'+ {count - 3} more', size=12, fill=FAINT)
+            self.text(d, (L, 130), f'+ {count - 3} more', size=12, fill=FAINT)
         free = shutil.disk_usage(DOWNLOADS if DOWNLOADS.exists() else HOME).free
         if total > free:
-            self.text(d, (120, 117), f'Only {human_size(free)} free', size=12, fill=RED)
+            self.text(d, (R, 130), f'Only {human_size(free)} free', size=12, fill=RED, anchor_right=True)
         self.footer(d, [('Y', 'Accept'), ('N', 'Decline')])
 
     def draw_transfer(self, d):
@@ -1198,32 +1212,32 @@ class App:
             headline = 'Text message'
         else:
             headline = f'{count} file{"s" if count != 1 else ""}  ·  {human_size(t.total)}'
-        self.text(d, (12, 44), headline, size=15, fill=FG, bold=True)
+        self.text(d, (L, 59), headline, size=15, bold=True)
         if t.state == 'waiting':
-            self.text(d, (12, 68), f'Waiting for {t.peer} to accept…', size=12, fill=MUTED, max_width=296)
+            self.text(d, (L, 79), f'Waiting for {t.peer} to accept…', size=12, fill=MUTED, max_width=R - L)
         elif t.state == 'connecting':
-            self.text(d, (12, 68), 'Connecting…', size=12, fill=MUTED)
+            self.text(d, (L, 79), 'Connecting…', size=12, fill=MUTED)
         elif t.state == 'sending':
-            self.text(d, (12, 66), f'{t.file_index}/{count}  {t.current}', size=12, fill=MUTED, max_width=296)
+            w = self.text(d, (R, 79), f'{t.file_index}/{count}', size=11, fill=FAINT, anchor_right=True)
+            self.text(d, (L, 79), t.current, size=12, fill=MUTED, max_width=R - L - w - 10)
         if t.state in ('sending', 'done') and t.total:
             fraction = min(1.0, t.done_bytes / t.total)
-            d.rounded_rectangle((12, 88, 308, 98), radius=5, fill=TRACK)
+            d.rounded_rectangle((L, 88, R, 97), radius=5, fill=TRACK)
             if fraction > 0:
-                d.rounded_rectangle((12, 88, 12 + max(10, int(296 * fraction)), 98), radius=5,
+                d.rounded_rectangle((L, 88, L + max(10, int((R - L) * fraction)), 97), radius=5,
                                     fill=GREEN if t.state == 'done' else ACCENT)
-            info = f'{human_size(t.done_bytes)} / {human_size(t.total)}'
+            self.text(d, (L, 113), f'{human_size(t.done_bytes)} / {human_size(t.total)}', size=12, fill=MUTED)
             if t.state == 'sending' and t.speed:
-                info += f'  ·  {human_size(t.speed)}/s'
-            self.text(d, (12, 104), info, size=12, fill=MUTED)
+                self.text(d, (R, 113), f'{human_size(t.speed)}/s', size=12, fill=MUTED, anchor_right=True)
         if t.state == 'done':
             if sending:
                 text = 'Delivered' if getattr(t, 'text', None) is not None else 'All files sent'
             else:
                 text = 'Saved to ' + str(DOWNLOADS).replace(str(HOME), '~', 1)
-            self.text(d, (12, 122), text, size=12, fill=GREEN, max_width=296)
+            self.text(d, (L, 133), text, size=12, fill=GREEN, max_width=R - L)
         elif t.finished():
             text = t.error or {'declined': f'{t.peer} declined', 'cancelled': 'Cancelled'}.get(t.state, t.state)
-            self.text(d, (12, 122), text, size=12, fill=colours.get(t.state, RED), max_width=296)
+            self.text(d, (L, 133), text, size=12, fill=colours.get(t.state, RED), max_width=R - L)
         if t.finished():
             self.footer(d, [('Enter', 'OK')])
         else:
@@ -1237,14 +1251,17 @@ class App:
         for paragraph in text.split('\n'):
             line = ''
             for ch in paragraph:
-                if d.textlength(line + ch, font=font) > 292:
-                    lines.append(line)
-                    line = ''
-                line += ch
+                if d.textlength(line + ch, font=font) > R - L:
+                    cut = line.rfind(' ') + 1               # wrap at the last space; long words and CJK by char
+                    if cut <= 0 or ch == ' ':
+                        cut = len(line)
+                    lines.append(line[:cut].rstrip())
+                    line = line[cut:].lstrip() if ch != ' ' else ''
+                line += ch if (line or ch != ' ') else ''
             lines.append(line)
         self.message_lines = len(lines)
         for i, line in enumerate(lines[scroll:scroll + 6]):
-            d.text((12, 41 + i * 17), line, font=font, fill=FG)
+            d.text((L, 56 + i * 17), line, font=font, fill=FG, anchor='ls')
         keys = [('Enter', 'Close'), ('S', 'Save as file')]
         if len(lines) > 6:
             keys.insert(1, ('F/X', 'Scroll'))

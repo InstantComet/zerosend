@@ -1,0 +1,14 @@
+Package: cz-beam
+Version: @VERSION@
+Architecture: all
+Maintainer: InstantComet <10364622+InstantComet@users.noreply.github.com>
+Section: net
+Priority: optional
+Depends: python3 (>= 3.11), python3-pil (>= 9.4), python3-cryptography, iproute2, fonts-dejavu-core
+Homepage: https://github.com/InstantComet/cz-beam
+Description: LocalSend-compatible file sharing for the M5Stack CardputerZero
+ Beam sends and receives files and text messages with LocalSend apps on
+ phones and computers on the same network (LocalSend protocol v2, HTTPS).
+ It asks on screen before accepting files and saves them to ~/Downloads.
+ Only runs while the app is open. Unofficial: not affiliated with or
+ endorsed by the LocalSend project.

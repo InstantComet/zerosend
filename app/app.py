@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Beam: send and receive files with LocalSend-compatible apps on the CardputerZero.
+"""ZeroSend: send and receive files with LocalSend-compatible apps on the CardputerZero.
 
 An APPLaunch app that draws straight to the LCD framebuffer with PIL and reads
 the internal keyboard. While it is open it speaks the LocalSend v2 protocol
@@ -8,7 +8,7 @@ UDP multicast, answers on HTTPS port 53317, asks on screen before accepting
 files (or accepts automatically, if set), and sends files or text to the
 devices it finds. Nothing runs once the app is closed.
 
-Files land in ~/Downloads. Settings: ~/.config/cz-beam/config.json.
+Files land in ~/Downloads. Settings: ~/.config/zerosend/config.json.
 """
 import argparse
 import array
@@ -41,21 +41,21 @@ import uuid
 
 from PIL import Image, ImageDraw, ImageFont, ImageMath
 
-APP_NAME = 'Beam'
-PKG = 'cz-beam'
+APP_NAME = 'ZeroSend'
+PKG = 'zerosend'
 VERSION = '1.0.0'
 PROTOCOL_VERSION = '2.1'
 DEVICE_MODEL = 'CardputerZero'
 DEVICE_TYPE = 'mobile'
-PORT = int(os.environ.get('CZ_BEAM_PORT', '53317'))
+PORT = int(os.environ.get('ZEROSEND_PORT', '53317'))
 MULTICAST_GROUP = '224.0.0.167'
-MULTICAST_PORT = int(os.environ.get('CZ_BEAM_MULTICAST_PORT', '53317'))
+MULTICAST_PORT = int(os.environ.get('ZEROSEND_MULTICAST_PORT', '53317'))
 API = '/api/localsend/v2/'
 
 HOME = Path.home()
-STATE_DIR = Path(os.environ.get('CZ_BEAM_STATE', HOME / '.config' / PKG))
+STATE_DIR = Path(os.environ.get('ZEROSEND_STATE', HOME / '.config' / PKG))
 CONFIG_FILE = STATE_DIR / 'config.json'
-DOWNLOADS = Path(os.environ.get('CZ_BEAM_DOWNLOADS', HOME / 'Downloads'))
+DOWNLOADS = Path(os.environ.get('ZEROSEND_DOWNLOADS', HOME / 'Downloads'))
 BACKLIGHT = Path('/sys/class/backlight/backlight/brightness')
 KEYBOARD = '/dev/input/cardputer-zero-internal'
 LAUNCHER_CONFIG = HOME / '.config/cardputerzero/config.json'
@@ -66,17 +66,20 @@ FONT_TITLE = '/usr/share/APPLaunch/share/font/Montserrat-Bold.ttf'
 FONT_CJK = ['/usr/share/APPLaunch/share/font/NotoSansCJK-Regular.ttc',
             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc']
 
-BG = '#000000'
-FG = '#ffffff'
-MUTED = '#a7b0bb'
-FAINT = '#7d8793'
-DIM = '#4b535d'
-ROW = '#1c232b'
-RULE = '#2a3139'
-ACCENT = '#3cc8f0'    # Beam blue: selection bar, progress
-GREEN = '#33e06a'
-YELLOW = '#ffcc1a'
-RED = '#ff5a52'
+# LocalSend's dark theme: Material 3 colour scheme from the seed Colors.teal (#009688).
+BG = '#0e1513'        # surface
+FG = '#dde4e1'        # onSurface
+MUTED = '#bec9c5'     # onSurfaceVariant
+FAINT = '#899390'     # outline
+DIM = '#5b6563'
+ROW = '#334b47'       # secondaryContainer: selected row
+TRACK = '#252b2a'     # surfaceContainerHigh: progress track
+RULE = '#3f4946'      # outlineVariant
+ACCENT = '#82d5c8'    # primary
+ON_ACCENT = '#003731' # onPrimary
+GREEN = ACCENT        # done / visible: LocalSend shows success in its primary colour
+YELLOW = '#ffb74d'    # warnings (LocalSend uses orange)
+RED = '#ffb4ab'       # error
 VISIBLE = 5
 
 
@@ -101,6 +104,13 @@ def human_size(n):
 
 
 # ---------------------------------------------------------------- settings
+
+def migrate_old_state():
+    """Keep the certificate and settings of the pre-release name (cz-beam)."""
+    old = HOME / '.config' / 'cz-beam'
+    if not STATE_DIR.exists() and old.is_dir() and 'ZEROSEND_STATE' not in os.environ:
+        shutil.copytree(old, STATE_DIR, ignore=shutil.ignore_patterns('app.lock', 'app.log'))
+
 
 def load_config():
     config = {'alias': socket.gethostname() or 'Cardputer', 'accept': 'ask',
@@ -425,7 +435,7 @@ def unique_path(path):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
-    server_version = 'Beam'
+    server_version = 'ZeroSend'
     core = None
 
     def log_message(self, fmt, *args):
@@ -1103,7 +1113,7 @@ class App:
             def marker(d, x, y, path=path, is_dir=is_dir):
                 if path in marked:
                     d.rounded_rectangle((x + 1, y + 3, x + 13, y + 15), radius=3, fill=GREEN)
-                    d.line((x + 4, y + 9, x + 6, y + 12, x + 11, y + 5), fill=BG, width=2)
+                    d.line((x + 4, y + 9, x + 6, y + 12, x + 11, y + 5), fill=ON_ACCENT, width=2)
                 elif is_dir:
                     d.polygon((x + 1, y + 4, x + 6, y + 4, x + 8, y + 6, x + 14, y + 6, x + 14, y + 15,
                                x + 1, y + 15), outline=ACCENT if i == sel else MUTED)
@@ -1197,7 +1207,7 @@ class App:
             self.text(d, (12, 66), f'{t.file_index}/{count}  {t.current}', size=12, fill=MUTED, max_width=296)
         if t.state in ('sending', 'done') and t.total:
             fraction = min(1.0, t.done_bytes / t.total)
-            d.rounded_rectangle((12, 88, 308, 98), radius=5, fill=ROW)
+            d.rounded_rectangle((12, 88, 308, 98), radius=5, fill=TRACK)
             if fraction > 0:
                 d.rounded_rectangle((12, 88, 12 + max(10, int(296 * fraction)), 98), radius=5,
                                     fill=GREEN if t.state == 'done' else ACCENT)
@@ -1571,6 +1581,7 @@ def launcher_brightness():
 
 
 def run():
+    migrate_old_state()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock = open(STATE_DIR / 'app.lock', 'w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1722,7 +1733,7 @@ def preview(screen, path):
     elif screen == 'message':
         app.showing_message = ('Pixel 8', 'Wi-Fi password for the workshop: maker-space-2026\nSee you at 7!', 0)
     elif screen == 'browser':
-        demo = Path(os.environ.get('CZ_BEAM_DEMO_DIR', HOME))
+        demo = Path(os.environ.get('ZEROSEND_DEMO_DIR', HOME))
         app.open_browser(demo)
     elif screen == 'input':
         app.ask('Message', 'text', 'Running late, start without me', hint='to Living room PC', ok='Send')

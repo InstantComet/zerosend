@@ -1,9 +1,9 @@
 #!/bin/bash
-# Build cz-beam_<version>_all.deb into ./build. Needs dpkg-deb (any Debian/Ubuntu).
+# Build zerosend_<version>_all.deb into ./build. Needs dpkg-deb (any Debian/Ubuntu).
 set -euo pipefail
 cd "$(dirname "$0")"
 VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' app-builder.json | head -1)
-PKG=cz-beam
+PKG=zerosend
 grep -q "^VERSION = '$VERSION'" app/app.py || { echo "app.py VERSION differs from app-builder.json ($VERSION)"; exit 1; }
 python3 -m py_compile app/app.py
 root=$(mktemp -d); trap 'rm -rf "$root"' EXIT

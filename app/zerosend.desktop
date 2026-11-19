@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Beam
+Name=ZeroSend
 Comment=Send and receive files with LocalSend apps on your phone or computer
-Exec=/usr/bin/python3 /usr/share/APPLaunch/apps/cz-beam/app.py
-Icon=share/images/cz-beam.png
+Exec=/usr/bin/python3 /usr/share/APPLaunch/apps/zerosend/app.py
+Icon=share/images/zerosend.png
 Terminal=false
 Categories=Network;
 StartupNotify=false
